@@ -1,20 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
-// Mock data for track recommendations (you can expand this)
-const ARTIST_TRACKS = {
-  '林俊杰': ['她说', '修炼爱情', '不为谁而作的歌', '曹操', '江南', 
-            '一千年以后', '背对背拥抱', '小酒窝', '学不会', 
-            '那些你很冒险的梦','西界','可惜没如果','黑暗骑士','醉赤壁',
-            '美人鱼','豆浆油条','伟大的渺小','圣所','因你而在','故事细腻',
-            '不潮不用花钱','手心的蔷薇','当你','心墙','我还想她', 
-            '编号89757','翅膀','爱与希望','爱笑的眼睛','不死之身','零度的亲吻',
-            '对的时间点','加油','我很想爱他'
-            ],
-  '周杰伦': ['七里香', '青花瓷', '简单爱', '双截棍', '夜曲', '晴天', '以父之名', '稻香', '告白气球', '听妈妈的话'],
-  'taylor swift': ['Love Story', 'Shake It Off', 'Blank Space', 'Bad Blood', 'You Belong With Me', 'Look What You Made Me Do', 'Cardigan', 'Willow', 'Anti-Hero'],
-  'default': ['Popular Song 1', 'Popular Song 2', 'Popular Song 3']
-};
+// You'll need to get a free API key from https://www.last.fm/api
+const LAST_FM_API_KEY = import.meta.env.VITE_LAST_FM_API_KEY;
+const LAST_FM_BASE_URL = 'https://ws.audioscrobbler.com/2.0/';
 
 const ApiCaller = () => {
   const [response, setResponse] = useState(null);
@@ -26,7 +15,53 @@ const ApiCaller = () => {
   });
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [fetchingSuggestions, setFetchingSuggestions] = useState(false);
 
+  // Debounce function to avoid too many API calls
+  const debounce = (func, delay) => {
+    let timeoutId;
+    return (...args) => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => func.apply(null, args), delay);
+    };
+  };
+
+  // Fetch track suggestions from Last.fm API
+  const fetchTrackSuggestions = async (artistName, trackQuery) => {
+    if (!artistName.trim() || !trackQuery.trim()) {
+      setSuggestions([]);
+      return;
+    }
+
+    try {
+      setFetchingSuggestions(true);
+      
+      const url = `${LAST_FM_BASE_URL}?method=track.search&track=${encodeURIComponent(trackQuery)}&artist=${encodeURIComponent(artistName)}&api_key=${LAST_FM_API_KEY}&format=json&limit=12`;
+      
+      const result = await axios.get(url);
+      
+      if (result.data.results?.trackmatches?.track) {
+        const tracks = result.data.results.trackmatches.track;
+        const trackNames = tracks.map(track => track.name);
+        setSuggestions(trackNames);
+      } else {
+        setSuggestions([]);
+      }
+    } catch (err) {
+      console.error('Error fetching suggestions:', err);
+      setSuggestions([]);
+    } finally {
+      setFetchingSuggestions(false);
+    }
+  };
+
+  // Debounced version of fetchTrackSuggestions
+  const debouncedFetchSuggestions = useCallback(
+    debounce(fetchTrackSuggestions, 300),
+    []
+  );
+
+  // Fetch lyrics from LRC Library API
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -48,39 +83,10 @@ const ApiCaller = () => {
     }
   };
 
+  // Fetch initial data on component mount
   useEffect(() => {
     fetchData();
   }, []);
-
-  // Debounced search recommendations
-  const getTrackSuggestions = useCallback((artistName, trackQuery) => {
-    if (!artistName.trim() || !trackQuery.trim()) {
-      setSuggestions([]);
-      return;
-    }
-
-    const artistTracks = ARTIST_TRACKS[artistName] || ARTIST_TRACKS.default || [];
-    
-    const filteredSuggestions = artistTracks.filter(track =>
-      track.toLowerCase().includes(trackQuery.toLowerCase())
-    );
-    
-    setSuggestions(filteredSuggestions.slice(0, 5)); // Show top 5 results
-  }, []);
-
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setSearchParams(prev => ({
-      ...prev,
-      [name]: value
-    }));
-
-    // If track_name is being typed, show suggestions
-    if (name === 'track_name') {
-      setShowSuggestions(true);
-      getTrackSuggestions(searchParams.artist_name, value);
-    }
-  };
 
   const handleArtistChange = (e) => {
     const { value } = e.target;
@@ -89,10 +95,22 @@ const ApiCaller = () => {
       artist_name: value
     }));
 
-    // When artist changes, update track suggestions based on new artist
+    // When artist changes, fetch new suggestions
     if (searchParams.track_name) {
-      getTrackSuggestions(value, searchParams.track_name);
+      debouncedFetchSuggestions(value, searchParams.track_name);
     }
+  };
+
+  const handleTrackChange = (e) => {
+    const { value } = e.target;
+    setSearchParams(prev => ({
+      ...prev,
+      track_name: value
+    }));
+
+    // Show suggestions and fetch from API
+    setShowSuggestions(true);
+    debouncedFetchSuggestions(searchParams.artist_name, value);
   };
 
   const handleSuggestionClick = (suggestion) => {
@@ -111,7 +129,6 @@ const ApiCaller = () => {
   };
 
   const handleBlur = () => {
-    // Hide suggestions after a short delay to allow clicking on them
     setTimeout(() => {
       setShowSuggestions(false);
     }, 200);
@@ -131,7 +148,7 @@ const ApiCaller = () => {
         
         <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginBottom: '20px' }}>
           <div>
-            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold', color: 'black' }}>
               Artist Name:
             </label>
             <input
@@ -151,14 +168,14 @@ const ApiCaller = () => {
           </div>
           
           <div style={{ position: 'relative' }}>
-            <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+            <label style={{ color: 'black', display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
               Track Name:
             </label>
             <input
               type="text"
               name="track_name"
               value={searchParams.track_name}
-              onChange={handleInputChange}
+              onChange={handleTrackChange}
               onFocus={() => setShowSuggestions(true)}
               onBlur={handleBlur}
               style={{
@@ -172,13 +189,12 @@ const ApiCaller = () => {
             />
             
             {/* Suggestions Dropdown */}
-            {showSuggestions && suggestions.length > 0 && (
+            {showSuggestions && (
               <div style={{
                 position: 'absolute',
                 top: '100%',
                 left: 0,
                 right: 0,
-                color: 'black',
                 backgroundColor: 'black',
                 border: '1px solid #ddd',
                 borderRadius: '4px',
@@ -187,23 +203,34 @@ const ApiCaller = () => {
                 maxHeight: '200px',
                 overflowY: 'auto'
               }}>
-                {suggestions.map((suggestion, index) => (
-                  <div
-                    key={index}
-                    onClick={() => handleSuggestionClick(suggestion)}
-                    style={{
-                      padding: '10px',
-                      cursor: 'pointer',
-                      borderBottom: '1px solid #eee',
-                      backgroundColor: '#f8f9fa',
-                      transition: 'background-color 0.2s'
-                    }}
-                    onMouseEnter={(e) => e.target.style.backgroundColor = '#e9ecef'}
-                    onMouseLeave={(e) => e.target.style.backgroundColor = '#f8f9fa'}
-                  >
-                    {suggestion}
+                {fetchingSuggestions ? (
+                  <div style={{ padding: '10px', color: '#666', textAlign: 'center' }}>
+                    Loading suggestions...
                   </div>
-                ))}
+                ) : suggestions.length > 0 ? (
+                  suggestions.map((suggestion, index) => (
+                    <div
+                      key={index}
+                      onClick={() => handleSuggestionClick(suggestion)}
+                      style={{
+                        padding: '10px',
+                        cursor: 'pointer',
+                        borderBottom: '1px solid #eee',
+                        backgroundColor: 'white',
+                        color: 'black',
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.target.style.backgroundColor = '#e9ecef'}
+                      onMouseLeave={(e) => e.target.style.backgroundColor = '#f8f9fa'}
+                    >
+                      {suggestion}
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ padding: '10px', color: '#666', textAlign: 'center' }}>
+                    No suggestions found
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -256,7 +283,7 @@ const ApiCaller = () => {
       {response && !loading && (
         <div>
           <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-            <h2 style={{ color: '#eff3f7ff', marginBottom: '5px' }}>{response?.name}</h2>
+            <h2 style={{ color: '#2c3e50', marginBottom: '5px' }}>{response?.name}</h2>
             <p style={{ color: '#7f8c8d', fontSize: '18px', margin: 0 }}>
               by {response?.artistName}
             </p>
